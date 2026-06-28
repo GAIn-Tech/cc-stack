@@ -24,6 +24,8 @@ LOG_FILE = GAINTECH / "bootstrap.log"
 SHARE = HOME / ".local/share/gaintech"
 NPM_PREFIX = HOME / ".npm-global"
 PLUGIN_DIR = SHARE / "cc-stack-plugin"
+USER_SETTINGS = Path(env("CLAUDE_CONFIG_DIR", str(HOME / ".claude"))) / "settings.json"
+GIT_HOOKS_DIR = SHARE / "githooks"
 
 MEMOS_DIR = SHARE / "memoryos"
 MEMOS_VENV = MEMOS_DIR / ".venv"
@@ -373,34 +375,30 @@ def install_extra_mcps():
         for k in EXTRA:
             STATE[k] = "skipped"
         return
-    log("extra MCPs: Context7 + Tavily + Cloudflare (claude mcp add)")
+    log("extra MCPs: Context7 + Tavily + Cloudflare (claude mcp add) -- all enabled")
 
-    # Context7 (Upstash) -- up-to-date library docs/code. Key OPTIONAL (rate-limited without).
+    # Context7 (Upstash) -- up-to-date library docs/code. Key optional (header if present).
     c7 = env("CONTEXT7_API_KEY", "")
     add_http_mcp("context7", "context7", "https://mcp.context7.com/mcp",
                  header=(f"CONTEXT7_API_KEY: {c7}" if c7 else None))
 
-    # Tavily web search -- key REQUIRED headlessly (the OAuth alternative needs a browser).
+    # Tavily web search. With a key -> fully headless; without -> register the OAuth
+    # endpoint so it's still enabled (one-time `/mcp` auth completes it). Never skipped.
     tv = env("TAVILY_API_KEY", "")
-    if tv:
-        add_http_mcp("tavily", "tavily", f"https://mcp.tavily.com/mcp/?tavilyApiKey={tv}")
-    else:
-        STATE["tavily"] = "skipped"
-        warn("TAVILY_API_KEY not set -> skipping Tavily (set it in the container env panel, not the repo)")
+    tv_url = f"https://mcp.tavily.com/mcp/?tavilyApiKey={tv}" if tv else "https://mcp.tavily.com/mcp/"
+    add_http_mcp("tavily", "tavily", tv_url,
+                 required_note=("registered; complete one-time OAuth via /mcp" if not tv else None))
 
     # Cloudflare docs server -- public, no auth.
     add_http_mcp("cloudflare-docs", "cloudflare-docs", "https://docs.mcp.cloudflare.com/mcp")
 
-    # Cloudflare API (Code Mode search/execute over the whole API). Token path avoids browser OAuth.
+    # Cloudflare API (Code Mode over the whole API). Token -> headless; else OAuth via /mcp.
     cf = env("CLOUDFLARE_API_TOKEN", "")
-    if cf:
-        add_http_mcp("cloudflare-api", "cloudflare-api", "https://mcp.cloudflare.com/mcp",
-                     header=f"Authorization: Bearer {cf}")
-    else:
-        STATE["cloudflare-api"] = "skipped"
-        warn("CLOUDFLARE_API_TOKEN not set -> skipping Cloudflare API server (OAuth needs a browser)")
+    add_http_mcp("cloudflare-api", "cloudflare-api", "https://mcp.cloudflare.com/mcp",
+                 header=(f"Authorization: Bearer {cf}" if cf else None),
+                 required_note=("registered; complete one-time OAuth via /mcp" if not cf else None))
 
-    # Cloudflare Skills plugin (official agents recommendation): bundles skills + slash commands.
+    # Cloudflare Skills plugin (official agents recommendation): skills + slash commands.
     if plugin_cli_ok():
         run("cf skills marketplace", "claude", "plugin", "marketplace", "add", "cloudflare/skills")
         done = False
@@ -411,7 +409,58 @@ def install_extra_mcps():
             STATE["cloudflare-skills"] = "degraded"
             FAILURES["cloudflare-skills"] = "marketplace added; install name unresolved -> `/plugin install <name>@cloudflare`"
     else:
-        STATE["cloudflare-skills"] = "skipped"
+        STATE["cloudflare-skills"] = "degraded"
+        FAILURES["cloudflare-skills"] = "claude plugin CLI unavailable"
+
+# --------------------------------------------------------------------------
+# Disable AI/Claude commit + PR attribution (off by default).
+# Official setting (https://code.claude.com/docs/en/settings): attribution.commit/pr.
+# Empty strings remove the "Co-Authored-By: Claude" trailer and the
+# "Generated with Claude Code" PR footer. Supersedes the deprecated
+# includeCoAuthoredBy boolean. No CLI exists for it -> idempotent merge of this one key.
+# --------------------------------------------------------------------------
+def disable_attribution():
+    want = {"commit": "", "pr": ""}
+    try:
+        USER_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if USER_SETTINGS.exists():
+            try:
+                data = json.loads(USER_SETTINGS.read_text() or "{}")
+            except Exception:
+                data = {}
+        if data.get("attribution") != want:
+            data["attribution"] = want
+            data.pop("includeCoAuthoredBy", None)  # deprecated; don't let it conflict
+            USER_SETTINGS.write_text(json.dumps(data, indent=2))
+        STATE["attribution"] = "off"
+        ok("attribution OFF (no Co-Authored-By / no 'Generated with Claude Code' in commits or PRs)")
+    except Exception as e:
+        STATE["attribution"] = "unknown"
+        warn(f"could not disable attribution: {e}")
+    # Belt-and-suspenders: a commit-msg hook that strips any attribution lines that
+    # slip through (Anthropic tracks the setting being intermittently ignored).
+    # Non-destructive: only wired if no core.hooksPath is already set.
+    try:
+        cur = cap("git", "config", "--global", "--get", "core.hooksPath")
+        already = (cur.stdout or "").strip() if cur and cur.returncode == 0 else ""
+        if not already or already == str(GIT_HOOKS_DIR):
+            GIT_HOOKS_DIR.mkdir(parents=True, exist_ok=True)
+            hook = GIT_HOOKS_DIR / "commit-msg"
+            hook.write_text(
+                "#!/usr/bin/env bash\n"
+                "f=\"$1\"\n"
+                "grep -viE '^(Co-Authored-By: Claude|.*Generated with .*Claude Code|🤖 Generated with)' "
+                "\"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"\n"
+            )
+            os.chmod(hook, 0o755)
+            run("git attribution scrubber", "git", "config", "--global", "core.hooksPath", str(GIT_HOOKS_DIR))
+            ok("installed commit-msg attribution scrubber (global git hook)")
+        else:
+            warn(f"core.hooksPath already set to {already}; skipping scrubber (attribution setting still applies)")
+    except Exception as e:
+        warn(f"attribution scrubber not installed: {e}")
+
 
 # --------------------------------------------------------------------------
 # gitignore (not a Claude config; safe to write)
@@ -496,6 +545,7 @@ def mandate():
         "headroom auto-compresses large tool outputs via a PostToolUse hook (reversible); MemoryOS persists decisions/profile (add_memory / retrieve_memory); query codebase-memory (search_graph/trace_call_path) before grepping; use Context7 for up-to-date library docs and Tavily for web search; delegate heavy reads to OMC subagents to keep this context lean.",
         "Validate/heal the stack before substantive work: if any CORE component is not OK, run `cc-stack heal` then `cc-stack validate`. Cloudflare API and some servers may show as absent until OAuth is completed via `/mcp`. Failure detail is in .gaintech/bootstrap.log and .gaintech/stack-state.json. Usual blockers: missing $NVIDIA_API_KEY/$TAVILY_API_KEY or container network not allowing github.com / huggingface.co / integrate.api.nvidia.com / mcp.context7.com / mcp.tavily.com / *.mcp.cloudflare.com.",
         "Treat healing as a hermeneutic circle: read each component's health against the whole, re-read the whole each session; apply the same whole<->part discipline to OMC subagent coordination.",
+        "Never add AI/Claude attribution to git: no 'Co-Authored-By: Claude' trailer, no 'Generated with Claude Code' line, no Claude identity as author or co-author, in any commit or PR. Attribution is disabled by config and by a commit-msg scrubber; do not reintroduce it.",
     ]
     if fl: lines.insert(2, "Recorded failures: " + fl + ".")
     return "\n".join(lines)
@@ -504,7 +554,7 @@ def mandate():
 # orchestration
 # --------------------------------------------------------------------------
 def install_all():
-    ensure_deps(); install_omc(); install_cbm(); install_memoryos(); install_hooks_plugin(); install_extra_mcps(); ensure_gitignore()
+    ensure_deps(); disable_attribution(); install_omc(); install_cbm(); install_memoryos(); install_hooks_plugin(); install_extra_mcps(); ensure_gitignore()
 def report():
     log("================= stack summary =================")
     for k in CORE:
@@ -512,6 +562,7 @@ def report():
     log("  -- integrations --")
     for k in EXTRA:
         log(f"  {k:<22} {STATE.get(k, 'unknown')}")
+    log(f"  {'git-attribution':<22} {STATE.get('attribution', 'unknown')}")
     for k, v in FAILURES.items():
         warn(f"  {k}: {v}")
     if not NIM_API_KEY: warn("Set NVIDIA_API_KEY in the container's Environment variables panel — MemoryOS needs it.")

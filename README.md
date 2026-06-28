@@ -7,11 +7,13 @@ Headless bootstrap + self-heal for the Claude Code remote-container stack:
 - **MemoryOS-MCP** — persistent persona memory (short/mid/long-term). Registered via `claude mcp add`; LLM + embeddings served by **NVIDIA NIM** (`nvidia/nemotron-3-ultra-550b-a55b` + `baai/bge-m3`).
 - **headroom** — auto-compresses large tool outputs (reversible) as **hooks**, shipped in a generated plugin installed via `claude plugin install`. PostToolUse compress, SessionStart doctor, SessionEnd `learn`.
 
-Plus three search/docs MCP integrations (all registered via `claude mcp add --transport http`, per the [official MCP docs](https://code.claude.com/docs/en/mcp)):
+Plus three search/docs MCP integrations (all registered via `claude mcp add --transport http`, per the [official MCP docs](https://code.claude.com/docs/en/mcp)). **All are enabled by default — nothing is key-gated into "skipped."** A key makes a server work fully headlessly; without one, the server is still registered against its OAuth endpoint and finishes with a one-time `/mcp` auth:
 
-- **Context7** (Upstash) — up-to-date, version-specific library docs/code. Added at `https://mcp.context7.com/mcp`; `CONTEXT7_API_KEY` optional (works rate-limited without one).
-- **Tavily** — web search/extract/crawl. Added at `https://mcp.tavily.com/mcp/?tavilyApiKey=…`; **requires `TAVILY_API_KEY`** headlessly (the OAuth alternative needs a browser), so it's skipped if the key is absent.
-- **Cloudflare** — the public **docs** server `https://docs.mcp.cloudflare.com/mcp` (always), the **API** Code-Mode server `https://mcp.cloudflare.com/mcp` (only if `CLOUDFLARE_API_TOKEN` is set, avoiding browser OAuth), and the official **Cloudflare Skills** plugin (`claude plugin marketplace add cloudflare/skills`).
+- **Context7** (Upstash) — up-to-date, version-specific library docs/code. `https://mcp.context7.com/mcp`; `CONTEXT7_API_KEY` optional (works rate-limited without one).
+- **Tavily** — web search/extract/crawl. With `TAVILY_API_KEY` → `…/mcp/?tavilyApiKey=…` (headless); without → `…/mcp/` (one-time `/mcp` OAuth).
+- **Cloudflare** — public **docs** server `https://docs.mcp.cloudflare.com/mcp`; the **API** Code-Mode server `https://mcp.cloudflare.com/mcp` (Bearer via `CLOUDFLARE_API_TOKEN`, else `/mcp` OAuth); and the official **Cloudflare Skills** plugin (`claude plugin marketplace add cloudflare/skills`).
+
+**AI attribution is OFF by default.** No `Co-Authored-By: Claude` trailer, no `Generated with Claude Code` footer, no Claude identity as author/co-author — in any commit or PR. This is enforced two ways: the official `attribution` setting (`{"commit":"","pr":""}`, which supersedes the deprecated `includeCoAuthoredBy`) and a global `commit-msg` scrubber hook as a backstop (Anthropic tracks the setting being intermittently ignored). The injected session mandate also instructs against reintroducing it.
 
 ## Guarantee: no config-file guesswork
 
@@ -48,5 +50,5 @@ Internal subcommands (used by the config we register, not run by hand): `hook-co
 - Auto-compression uses `hookSpecificOutput.updatedToolOutput` (Claude Code ≥ v2.1.121). On older builds the hook degrades to passthrough (safe); `headroom learn` still runs.
 - Heavier ML text compression: install with the `headroom-ai[all]` extra (pulls a ~2 GB model). Default is the lean build (JSON/log/code compression).
 - Every failure is recorded with an explicit reason in `.gaintech/bootstrap.log` and `.gaintech/stack-state.json`.
-- Integrations are optional and never fail the core stack: Tavily is skipped without `TAVILY_API_KEY`; the Cloudflare API server shows as `absent` until you complete OAuth via `/mcp` (unless `CLOUDFLARE_API_TOKEN` is set); the Cloudflare Skills plugin name may need a manual `/plugin install <name>@cloudflare` if auto-resolution misses. Disable all integrations with `--no-extras`.
+- Everything is enabled by default; the only way anything is `skipped` is if you explicitly pass `--no-omc` / `--no-cbm` / `--no-memoryos` / `--no-headroom` / `--no-extras`. Servers without a credential register against their OAuth endpoint and finish with a one-time `/mcp` auth, so they show as enabled rather than skipped.
 - Changing `NIM_EMBED_MODEL` requires a fresh MemoryOS data dir (the data path is keyed to the embedding model).
