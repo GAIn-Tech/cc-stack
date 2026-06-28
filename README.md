@@ -28,8 +28,8 @@ The CLI **never hand-edits** `.mcp.json`, `.claude/settings.json`, or `CLAUDE.md
 1. This repo is public at `github.com/GAIn-Tech/cc-stack` (the `bootstrap.sh` default points here). To use your own copy, fork it and set `CC_STACK_REPO`.
 2. In your Claude Code remote environment:
    - **Environment variables** (this is where secrets live — never the repo): `NVIDIA_API_KEY=nvapi-…` (required). Optional: `TAVILY_API_KEY=tvly-…` (enables Tavily search), `CONTEXT7_API_KEY=…` (higher Context7 limits), `CLOUDFLARE_API_TOKEN=…` (enables the Cloudflare API MCP without OAuth), plus knobs like `CC_STACK_REPO`, `EMBED_PROVIDER`, `NIM_LLM_MODEL`.
-   - **Network:** set to **All** (or allow `github.com`, `*.githubusercontent.com`, `huggingface.co`, `integrate.api.nvidia.com`, `registry.npmjs.org`, `pypi.org`, `mcp.context7.com`, `mcp.tavily.com`, `docs.mcp.cloudflare.com`, `mcp.cloudflare.com`).
-   - **Setup script / startup command:** paste `bootstrap.sh` as-is (no edits needed unless you forked).
+   - **Network:** in claude.ai → Settings → Capabilities → "Code execution and file creation", set the domain allowlist to **All domains**, or add **`codeload.github.com`** (PyPI/`files.pythonhosted.org` are already allowed for dependencies). Plus, for the MCP servers at runtime: `mcp.context7.com`, `mcp.tavily.com`, `docs.mcp.cloudflare.com`, `mcp.cloudflare.com`, and `huggingface.co` / `integrate.api.nvidia.com` for MemoryOS.
+   - **Setup script / startup command:** paste `bootstrap.sh` as-is. It fetches the repo as an HTTPS **tarball** (not `git+https`) on purpose: Claude Code on the web routes git through a proxy scoped to *this environment's configured repo*, so `git clone` of any other repo — public or not — returns 403. The tarball uses the normal egress allowlist instead. (On a normal machine, it falls back to `git+https` automatically.)
 3. The setup script installs the CLI from the repo and runs `cc-stack bootstrap`. A SessionStart hook then runs `cc-stack doctor --hook` every session to validate + inject status before anything else.
 
 ## Commands
