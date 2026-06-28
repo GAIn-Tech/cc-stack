@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# cc-stack runtime artifacts (created at run time in the target repo, not source)
+.gaintech/
+
+# editor / OS
+.DS_Store
+*.swp
